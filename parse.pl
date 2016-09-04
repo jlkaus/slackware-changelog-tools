@@ -249,7 +249,7 @@ foreach(@entries) {
 	my $moves = $cc_moved ? sprintf("m%-3d", $cc_moved):"    ";
 	#my $others = $cc_other ? sprintf("?%-3d", $cc_other):"    ";
 
-	printf("$e->{isotime}: %4d: (%3ds) $split:  $adds $upgrades $patches $rebuilds $moves $removes\n", $cc, $sec, $cc_p, $cc_s + $cc_o);
+	printf("$e->{isotime}: %4d: (%3ds) $split:  $adds $upgrades $patches $rebuilds $moves $removes\n", $cc, $sec);
 
 	my $summat_else = undef;
 

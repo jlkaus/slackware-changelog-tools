@@ -1,4 +1,4 @@
 #!/bin/bash
 
-wget -O - ftp://ftp.slackware.com/pub/slackware/slackware64-current/ChangeLog.txt
+wget -O - -q ftp://ftp.slackware.com/pub/slackware/slackware64-current/ChangeLog.txt
 
