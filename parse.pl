@@ -383,7 +383,7 @@ foreach(@entries) {
         if($display_date || $display_summary) {
             $prefix =  "\t";
         }
-        push @later_lines, "$prefix$_\n" foreach split /\n/, $e->{message};
+        push @later_lines, "$prefix$_" foreach split /\n/, $e->{message};
         $summat_else = 1;
     }
 

@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -e
+
+
+krnl-install-new
+krnl-clean-old
+krnl-build-initrds
+krnl-copy-to-efi
+
+exit 0

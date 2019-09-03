@@ -3,6 +3,37 @@
 use strict;
 use warnings;
 
+# Rough arch and tools:
+
+# Install/update any newer kernel packages available
+#   install-new-kernels
+# Determine kernel versions to keep/remove, and which should be the old/current boot kernels
+# Remove old kernel packages
+# (does the work to determine which ones we'll want to save and which to delete, unless the override list is given)
+# (if overrides are given, complains if they don't exist)
+#   clean-old-kernels [<list of kernel versions to force remove>]
+# Ensure all installed kernels have an initrd generated in /boot (may need to re-generate if a version was updated)
+# (rebuilds initrds for all generic kernels in /boot that either don't have an initrd, or the kernel timestamp is newer than the existing initrd, or is on the force list)
+# (if the force list is given, doesn't do any other versions)
+# (if the force list is given, complains if they don't exist, or their modules don't exist)
+#   build-initrds [<list of kernel versions to force rebuild>]
+# Copy desired old and current kernels and initrds from /boot to /boot/efi/EFI/Slackware/
+# (does the work to determine which ones we'll want to use for current and old, based on the installed set and the currently booted kernel/oldest installed kernel)
+# (if the overrides are set, doesn't do any magic, and just complains if those aren't available)
+#   copy-kernels-to-efi [<current kernel version> <old kernel version>]
+
+# Analyze kernel versions:
+#  Finds the currently installed/in-use/available kernels, and does a sanity check to ensure
+#  initrds exist for generic kernels, and that the modules exist for kernels that are around,
+#  and that no source/modules are installed for kernels that don't exist.
+#    analyze-kernels
+
+
+
+
+
+
+
 
 # Determine which kernels are currently:
 #   in-use (booted & running, uname -r)
