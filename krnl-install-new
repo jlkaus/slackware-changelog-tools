@@ -1,0 +1,135 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+use FindBin;
+
+our $TOOLDIR = $FindBin::Bin;
+our $PKGLOGDIR = '/var/lib/pkgtools';
+our $VERSION = 'current';
+
+# Using:
+#   stream-current $VERSION | parse.pl --changes --skip-empty --pkg kernel-generic --pkg kernel-huge --pkg kernel-modules --pkg kernel-source --last-version --exclude-location testing --no-date
+# Find the list of relevant new kernel packages since our last update.
+# Also, find the list of currently installed kernel packages.
+
+# For package name-version-arch matches (just build number changed):  upgradepkg to the new version
+# For new package versions: installpkg the new version next to the old ones
+
+# By default, just display the list of actions we are taking, and their result.
+# Allow for a dry-run, where we just display the list of actions.
+# Enable a verbose mode, where the actual output of the commands is kept.
+# Enable a silent mode, where nothing is displayed at all, just overall success/failure is reported via exit status.
+
+# Exit status is 0 (EX_OK) if no new packages were needed, or all packages were upgraded/installed successfully.
+# Exit status is 77 (EX_NOPERM) or 71 (EX_OSERR) if some new package upgrade or installation failed due to permissions or some other reason
+# Exit status is 74 (EX_IOERR) if we couldn't fetch some package from upstream
+# Exit status is 69 (EX_UNAVAILABLE) or 65 (EX_DATAERR) if we couldn't even get or parse the changelog
+# Exit status is 64 (EX_USAGE) if we didn't understand the options they passed in.
+
+################################################################################
+#
+#  Process Options
+#
+my $dry_run = undef;
+my $verbose = undef;
+my $silent = undef;
+
+if(!GetOptions('d|dry-run' => \$dry_run,
+               'v|verbose' => \$verbose,
+               's|silent' => \$silent)) {
+    print STDERR "Usage: krnl-install-new [-s|--silent] [-d|--dry-run] [-v|--verbose]\n";
+    exit(64);  # EX_USAGE
+}
+
+my $redir = "";
+$redir = "> /dev/null" if !$verbose || $silent;
+
+
+################################################################################
+#
+#  Fetch and process the changelog, looking for new kernel packages
+#
+my @new_pkgs = `$TOOLDIR/stream-current $VERSION | $TOOLDIR/parse.pl --changes --skip-empty --pkg kernel-generic --pkg kernel-huge --pkg kernel-modules --pkg kernel-source --last-version --exclude-location testing --no-date | awk '{print \$1}'`;
+my $rc = $? >> 8;
+exit($rc) if $rc;
+
+chomp @new_pkgs;
+
+################################################################################
+#
+#  Find our currently installed kernel packages
+#
+my @cur_pkgs = `if [ -d $PKGLOGDIR ]; then find $PKGLOGDIR -name 'kernel-generic-*' -name 'kernel-huge-*' -name 'kernel-modules-*' -name 'kernel-source-*' -type f -printf '%P\n'; fi`;
+$rc = $? >> 8;
+exit($rc) if $rc;
+
+chomp @cur_pkgs;
+
+################################################################################
+#
+#  Loop through each new package and do the needful
+#
+PKG: foreach(@new_pkgs) {
+    if(/^(.*)\/([^\/]+)-([^-]+)\.([^.]+)$/) {
+        my ($loc, $pkg, $bld, $ext) = ($1,$2,$3,$4);
+
+        ########################################################################
+        #
+        #  Determine if this package will get upgraded or installed
+        #
+        my $found_old = undef;
+        FINDOLD: foreach(@cur_pkgs) {
+            if(/^(.+)-([^-]+)$/) {
+                my ($opkg, $obld) = ($1, $2);
+                if($pkg eq $opkg) {
+                    if($bld eq $obld) {
+                        print "skipping   ${pkg}-${bld}\n" if !$silent;
+                        next PKG;
+                    } else {
+                        $found_old = 1;
+                        last FINDOLD;
+                    }
+                }
+            }
+        }
+
+        if(!$silent) {
+            if($found_old) {
+                print "upgradepkg ${pkg}-${bld}\n";
+            } else {
+                print "installpkg ${pkg}-${bld}\n";
+            }
+        }
+
+        if(!$dry_run) {
+            ####################################################################
+            #
+            #  Download the package to /tmp
+            #
+            system("$TOOLDIR/fetch-pkg.pl ${loc}/${pkg}-${bld}.${ext} $redir");
+            $rc = $? >> 8;
+            exit($rc) if $rc;
+
+            ####################################################################
+            #
+            #  Do the upgrade/install
+            #
+            if($found_old) {
+                system("upgradepkg /tmp/${pkg}-{$bld}.${ext} $redir");
+                $rc = $? >> 8;
+                exit($rc) if $rc;
+            } else {
+                system("installpkg /tmp/${pkg}-{$bld}.${ext} $redir");
+                $rc = $? >> 8;
+                exit($rc) if $rc;
+            }
+        }
+
+    } else {
+        die "ERROR: Invalid package name [$_]\n";
+    }
+}
+
+exit(0);

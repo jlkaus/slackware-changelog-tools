@@ -5,7 +5,7 @@ use warnings;
 use POSIX;
 use Time::Local;
 use DateTime;
-use DateTime::Format::Strptime;
+use Date::Parse;
 use Getopt::Long;
 
 # Display modes:
@@ -33,6 +33,9 @@ use Getopt::Long;
 # Package Filters:
 #   No filter (display all packages) [DEFAULT]
 #   --pkg PACKAGENAME (-p PKGNAME)
+# Temporal Filters:
+#   --since DATETIME
+#   --since-version PACKAGENAME-VERSION-ARCH-BUILD
 # Exclude locations:
 #   --exclude-location LOCATION
 
@@ -55,8 +58,18 @@ my $include_other = undef;
 my $include_security = undef;
 my $include_non_security = undef;
 
+my $since_date = undef;
+my $since_version = undef;
+my $last_version = undef;
+
 my @package_list = ();
 my @location_exclusions = ();
+
+sub diecode {
+    my ($status, $msg) = @_;
+    print STDERR $msg;
+    exit($status);
+}
 
 GetOptions('p|pkg=s' => \@package_list,
            'exclude-location=s' => \@location_exclusions,
@@ -76,7 +89,10 @@ GetOptions('p|pkg=s' => \@package_list,
            'other' => \$include_other,
            'security' => \$include_security,
            'non-security' => \$include_non_security,
-    ) or die "Usage: parse.pl [--date] [-s|--summary] [-c|--changes] [-d|--details] [-o|--overall] [--skip-empty] [--rebuilds] [--patches] [--upgrades] [--moves] [--updates] [--adds] [--removes] [--other] [--security] [--non-security] [--pkg PKGNAME]* [--exclude-location LOCATION]*\n";
+           'since=s' => \$since_date,
+           'since-version=s' => \$since_version,
+           'last-version' => \$last_version,
+    ) or diecode(64, "Usage: parse.pl [--date] [-s|--summary] [-c|--changes] [-d|--details] [-o|--overall] [--skip-empty] [--rebuilds] [--patches] [--upgrades] [--moves] [--updates] [--adds] [--removes] [--other] [--security] [--non-security] [--since DATE | --since-version PKG-VERSION-ARCH-BUILD] [--last-version] [--pkg PKGNAME]* [--exclude-location LOCATION]*\n");
 
 if(defined $include_security || defined $include_non_security || scalar @package_list || defined $include_rebuilds || defined $include_upgrades || defined $include_updates || defined $include_moves || defined $include_adds || defined $include_removes || defined $include_other || defined $include_patches) {
     $display_changes = 1;
@@ -105,7 +121,9 @@ if(!defined $display_overall && !defined $display_changes && !defined $display_d
     $display_summary = 1;
 }
 
-
+if(defined $since_date) {
+    $since_date = str2time($since_date);
+}
 
 # send in the changelog on stdin
 
@@ -146,6 +164,10 @@ my @entries = ();
 # they then start with a timestring line (left justified)
 # then lines of the overall message (left justified or empty)
 # change entry lines start with a left justified line that appears as above, and are followed by 0 or more lines indented by at least 2 spaces that are its message
+
+# Hash of <location>/<package>-<arch> -> <location>/<package>-<version>-<arch>-<build>.<ext>:<changetype>
+my %most_recent_versions = ();
+
 
 my $cur_entry = {changes => []};
 my $cur_change = undef;
@@ -202,9 +224,7 @@ while(<>) {
 
     if($cur_state eq "want_date" && ($line_type eq "date1" || $line_type eq "date2")) {
         # this line should be in the date format, or abort
-        my $dt = $line_type eq "date1" ?
-            DateTime::Format::Strptime::strptime("%a %b%n%d %T UTC %Y", $_) :
-            DateTime::Format::Strptime::strptime("%a%n%d %b %Y %I:%M:%S%t%p UTC", $_);
+        my $dt = DateTime->from_epoch(epoch=>str2time($_));
         $cur_entry->{timeline} = $_;
         $cur_entry->{isotime} = $dt->datetime()."Z";
         my $ts = $dt->epoch();
@@ -237,7 +257,7 @@ while(<>) {
         $cur_state = "want_date";
 
     } else {
-        die "ERROR: Got an unexpected state/input combination: $cur_state state and $line_type line [$_] ($.) during parsing.\n";
+        diecode(65, "ERROR: Got an unexpected state/input combination: $cur_state state and $line_type line [$_] ($.) during parsing.\n");
     }
 
 }
@@ -247,8 +267,91 @@ $cur_change = undef;
 unshift @entries, $cur_entry if defined $cur_entry;
 $cur_entry = undef;
 
-
+# Quick re-scan to pre-process the change entries
 foreach(@entries) {
+    my $e = $_;
+
+    foreach(@{$e->{changes}}) {
+        my $c = $_;
+
+        if(defined $c->{message} && $c->{message} =~ /^  \(\* Security fix \*\)$/m) {
+            $c->{securityfix} = 1;
+        }
+
+        if($c->{line} =~ /^([^\s:]+):\s+([A-Z][a-z]+)(\s.*)?\.?$/) {
+            $c->{name} = $1;
+            $c->{changetype} = lc $2;
+            my $fixme = undef;
+
+            if($c->{changetype} eq "patched") {
+            } elsif($c->{changetype} eq "rebuilt") {
+            } elsif($c->{changetype} eq "removed") {
+            } elsif($c->{changetype} eq "added") {
+            } elsif($c->{changetype} eq "upgraded") {
+            } elsif($c->{changetype} eq "moved") {
+            } elsif($c->{changetype} eq "updated") {
+            } else {
+                $fixme = 1;
+                diecode(65, "ERROR: Processing $c->{name} found unexpected change type [$c->{changetype}]\n");
+            }
+
+            if($3) {
+                $c->{changetypemod} = $3;
+                $c->{message} = "" if !defined $c->{message};
+                $c->{message} = "  ".(ucfirst $c->{changetype}).$c->{changetypemod}."\n".$c->{message};
+            }
+
+            if($fixme) {
+                $c->{changetype} = "upgraded";
+                delete $c->{changetypemod};
+            }
+        }
+
+        if($c->{linetype} eq "change_pkg") {
+            if($c->{line} =~ /^(?:([^\s]+)\/)?([^\s\/]+)-([^\s\/-]+)-([^\s\/-]+)-([^\s\/-]+)\.([^\s\/.-]+):  [A-Z][a-z]+.*\.?$/) {
+                $c->{location} = $1;
+                $c->{pkg} = $2;
+                $c->{version} = $3;
+                $c->{arch} = $4;
+                $c->{build} = $5;
+                $c->{ext} = $6;
+
+                $c->{mrv_key} = "$1/$2-$4";
+                $c->{mrv_val} = "$1/$2-$3-$4-$5.$6:$c->{changetype}";
+                $most_recent_versions{$c->{mrv_key}} = $c->{mrv_val};
+
+                $c->{primary_location} = $c->{location};
+                $c->{primary_location} =~ s/\/.*$//;
+            } else {
+                diecode(65, "ERROR: While post processing a change_pkg line [$c->{line}], I got confused.\n");
+            }
+        }
+
+        if($c->{linetype} eq "change_star") {
+            # print "\tchange_star:  [$c->{name} $c->{changetype}]\n";
+            my @parts = split /\//, $c->{name};
+            $c->{primary_location} = (scalar @parts) > 1 ? $parts[0] : "";
+            $c->{pkg} = pop @parts;
+            $c->{location} = join('/', @parts);
+        }
+
+        if($c->{linetype} eq "change_other") {
+            # print "\tchange_other: [$c->{name} $c->{changetype}]\n";
+            my @parts = split /\//, $c->{name};
+            $c->{primary_location} = (scalar @parts) > 1 ? $parts[0] : "";
+            $c->{pkg} = pop @parts;
+            $c->{location} = join('/', @parts);
+        }
+    }
+}
+
+
+
+
+my $met_since_req = undef;
+$met_since_req = 1 if !defined $since_date && !defined $since_version;
+
+ENTRY: foreach(@entries) {
     my $e = $_;
 
     my $oml = 0;
@@ -269,19 +372,23 @@ foreach(@entries) {
 
     $oml = scalar (split /\n/, $e->{message}) if defined $e->{message};
 
+    if(!$met_since_req && defined $since_date) {
+        if($e->{timestamp} > $since_date) {
+            $met_since_req = 1;
+        } else {
+            next ENTRY;
+        }
+    }
+
+    my $met_req_next = $met_since_req;
+
     foreach(@{$e->{changes}}) {
         my $c = $_;
 
-        if(defined $c->{message} && $c->{message} =~ /^  \(\* Security fix \*\)$/m) {
-            $c->{securityfix} = 1;
-            ++$sec;
-        }
+        ++$sec if $c->{securityfix};
 
         if($c->{line} =~ /^([^\s:]+):\s+([A-Z][a-z]+)(\s.*)?\.?$/) {
-            $c->{name} = $1;
-            $c->{changetype} = lc $2;
             ++$cc;
-            my $fixme = undef;
 
             if($c->{changetype} eq "patched") {
                 ++$cc_patched;
@@ -298,58 +405,15 @@ foreach(@entries) {
             } elsif($c->{changetype} eq "updated") {
                 ++$cc_upgraded;
             } else {
-                $fixme = 1;
-                die "ERROR: Processing $c->{name} found unexpected change type [$c->{changetype}]\n";
                 # ++$cc_other;
-            }
-
-            if($3) {
-                $c->{changetypemod} = $3;
-                $c->{message} = "" if !defined $c->{message};
-                $c->{message} = "  ".(ucfirst $c->{changetype}).$c->{changetypemod}."\n".$c->{message};
-            }
-
-            if($fixme) {
-                $c->{changetype} = "upgraded";
-                delete $c->{changetypemod};
                 ++$cc_upgraded;
             }
+
         }
 
-        if($c->{linetype} eq "change_pkg") {
-            if($c->{line} =~ /^(?:([^\s]+)\/)?([^\s\/]+)-([^\s\/-]+)-([^\s\/-]+)-([^\s\/-]+)\.([^\s\/.-]+):  [A-Z][a-z]+.*\.?$/) {
-                $c->{location} = $1;
-                $c->{pkg} = $2;
-                $c->{version} = $3;
-                $c->{arch} = $4;
-                $c->{build} = $5;
-                $c->{ext} = $6;
-
-                $c->{primary_location} = $c->{location};
-                $c->{primary_location} =~ s/\/.*$//;
-            } else {
-                die "ERROR: While post processing a change_pkg line [$c->{line}], I got confused.\n";
-            }
-            ++$cc_p;
-        }
-
-        if($c->{linetype} eq "change_star") {
-            ++$cc_s;
-            # print "\tchange_star:  [$c->{name} $c->{changetype}]\n";
-            my @parts = split /\//, $c->{name};
-            $c->{primary_location} = (scalar @parts) > 1 ? $parts[0] : "";
-            $c->{pkg} = pop @parts;
-            $c->{location} = join('/', @parts);
-        }
-
-        if($c->{linetype} eq "change_other") {
-            ++$cc_o;
-            # print "\tchange_other: [$c->{name} $c->{changetype}]\n";
-            my @parts = split /\//, $c->{name};
-            $c->{primary_location} = (scalar @parts) > 1 ? $parts[0] : "";
-            $c->{pkg} = pop @parts;
-            $c->{location} = join('/', @parts);
-        }
+        ++$cc_p if $c->{linetype} eq "change_pkg";
+        ++$cc_s if $c->{linetype} eq "change_star";
+        ++$cc_o if $c->{linetype} eq "change_other";
     }
 
     my $split = sprintf("%4dp+%df", $cc_p, $cc_s+$cc_o);
@@ -439,7 +503,7 @@ foreach(@entries) {
                 }
             }
 
-            if($candl) {
+            if($candl && (!$last_version || $most_recent_versions{$c->{mrv_key}} eq $c->{mrv_val})) {
                 $summat_else = 1;
                 push @later_lines, "$prefix$c->{name} $c->{changetype}";
                 if($display_details && defined $c->{message}) {
@@ -449,7 +513,7 @@ foreach(@entries) {
         }
     }
 
-    if(defined $first_line && defined $skip_empty && scalar @later_lines == 0) {
+    if(!$met_since_req || (defined $first_line && defined $skip_empty && scalar @later_lines == 0)) {
         # Don't display!
     } else {
         if(defined $first_line) {
@@ -459,6 +523,8 @@ foreach(@entries) {
         print "$_\n" foreach @later_lines;
         print "\n" if $summat_else && ($display_date || $display_summary);
     }
+
+    $met_since_req = $met_req_next;
 }
 
 

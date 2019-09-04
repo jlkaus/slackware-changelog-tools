@@ -5,7 +5,7 @@ use warnings;
 
 # Rough arch and tools:
 
-# Install/update any newer kernel packages available
+# Install/update the newest kernel packages available
 #   install-new-kernels
 # Determine kernel versions to keep/remove, and which should be the old/current boot kernels
 # Remove old kernel packages
