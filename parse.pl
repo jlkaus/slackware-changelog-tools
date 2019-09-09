@@ -385,6 +385,12 @@ ENTRY: foreach(@entries) {
     foreach(@{$e->{changes}}) {
         my $c = $_;
 
+        if(!$met_since_req && defined $since_version && defined $c->{version}) {
+            if("$c->{pkg}-$c->{version}-$c->{arch}-$c->{build}" eq $since_version) {
+                $met_req_next = 1;
+            }
+        }
+
         ++$sec if $c->{securityfix};
 
         if($c->{line} =~ /^([^\s:]+):\s+([A-Z][a-z]+)(\s.*)?\.?$/) {
