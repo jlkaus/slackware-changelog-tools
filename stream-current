@@ -1,6 +1,0 @@
-#!/bin/bash
-
-VERSION=${1:-current}
-
-wget -O - -q ftp://ftp.slackware.com/pub/slackware/slackware64-${VERSION}/ChangeLog.txt
-
